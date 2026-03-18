@@ -42,7 +42,7 @@ class SamplerConfig:
         ax.hist(sample, bins=100, density=True, alpha=0.5, color='steelblue', edgecolor='black', label=f'{name} samples')
         ax.set_xlim(np.min(sample) - 1, np.max(sample) + 1)
         
-        for name, metric in zip(['Mean', 'Variance', 'MSE', 'Wasserstein'], [np.mean, np.var, self.mse_mean, self.wassterstein]):
+        for name, metric in zip(['Mean', 'Variance', 'MSE', 'Wasserstein'], [np.mean, np.var, self.mse_first_moment, self.wassterstein]):
             ax.plot(0, 0, color='none', label=f'{name}: {metric(sample):.2f}')
         
         ax.legend()
@@ -53,8 +53,11 @@ class SamplerConfig:
             self.plot_sample(sample, name, ax)
         return fig, axes
     
-    def mse_mean(self, sample):
+    def mse_first_moment(self, sample):
         return (np.mean(sample) - self.true_mean())**2
+    
+    def mse_second_moment(self, sample):
+        return (np.mean(sample**2) - self.true_mean()**2)
     
     def wassterstein(self, sample):
         xx = np.linspace(np.min(sample) - 1, np.max(sample) + 1, len(sample))
@@ -93,24 +96,43 @@ def gibbs_sampler(config: SamplerConfig, SEED=0, tol = 1e-10):
     return np.array(samples)
 
 def make_pi_gamma(gamma, config: SamplerConfig):
-    def g_gamma(x):
-        xx = np.linspace(-10, 10, 1000)
-        R = config.lam * np.abs(xx)
-        dist = (xx - x)**2 / (2*gamma)
-        return np.min(R + dist)
+    # def H_gamma(x):
+    #     xx = np.linspace(-10, 10, 100000)
+    #     G = 0.5*(config.a*x-config.b)**2
+    #     R = config.lam * np.abs(xx)
+    #     dist = (xx - x)**2 / (2*gamma)
+    #     return np.min(R + dist) + G
+    # def pi_gamma(x):
+    #     return np.exp(-config.beta * np.vectorize(H_gamma)(x))
+        
+    # xx = np.linspace(-10, 10, 10000)
+    # Z = np.trapezoid(pi_gamma(xx), xx)
+    # rho_gamma = lambda x: pi_gamma(x)/Z
+    # return rho_gamma
+    def H_gamma(x):
+        G = 0.5 * (config.a * x - config.b) ** 2          # smooth quadratic term
+        z = prox_l1(x, gamma * config.lam)                               # prox step (vectorised)
+        envelope = config.lam * np.abs(z) + (z - x) ** 2 / (2 * gamma)  # Moreau envelope
+        return G + envelope
+
     def pi_gamma(x):
-        G = 0.5*(config.a*x-config.b)**2
-        pi = np.exp(-config.beta * (g_gamma(x)+G))
-        return pi
-    return np.vectorize(pi_gamma)
+        return np.exp(-config.beta * H_gamma(x))           # fully vectorised now
+
+    xx = np.linspace(-5, 5, 1000)
+    Z = np.trapezoid(pi_gamma(xx), xx)
+    return lambda x: pi_gamma(x) / Z
 
 def prox_l1(x, gamma):
     return np.sign(x) * np.maximum(np.abs(x) - gamma, 0)
 
-def myula_sampler(gamma, h, config: SamplerConfig, SEED=0):
+def myula_sampler(K, config: SamplerConfig, SEED=0):
     np.random.seed(SEED)
     a, b, beta, lam, n_samples, burn_in = config.get_params()
     G_prime = config.make_grad_G()
+    
+    L = a**2
+    gamma = 1.0 / (K*L)
+    h = gamma / (5*(gamma*L + 1))
 
     x = 0.0
     samples = []
@@ -126,10 +148,14 @@ def myula_sampler(gamma, h, config: SamplerConfig, SEED=0):
 
         x = x - h * (grad_G + grad_R_gamma) + noise
 
-        if i >= burn_in:
-            samples.append(x)
+        # if i >= burn_in:
+        #     samples.append(x)
+        
+        samples.append(x)
 
-    return np.array(samples)
+    # return np.array(samples)
+    return np.array(samples[burn_in:])
+    
 
 def hadamard_sampler(h, config: SamplerConfig, SEED=0):
     np.random.seed(SEED)
@@ -192,14 +218,14 @@ def main_hadamard():
     
 # main_hadamard()
 
-def main_all(gamma=0.01, h=0.05):
+def main_all(K=50, h=0.05):
 
     config = SamplerConfig()
     sample_size = config.n_samples
     print('Sampling...')
     sample_gib = gibbs_sampler(config)
     print('Done Gibbs sampling')
-    sample_myula = myula_sampler(gamma, h, config)
+    sample_myula = myula_sampler(K, config)
     print('Done MYULA sampling')
     sample_hadamard = hadamard_sampler(h, config)
     print('Done Hadamard sampling')
@@ -219,11 +245,14 @@ def main_all(gamma=0.01, h=0.05):
     #         print(f'For {name}: {metric(sample):.4f}')
 
     n_samples, burn_in = config.n_samples, config.burn_in
+    L = config.a**2
+    gamma = 1.0 / (K*L)
+    # pi_gamma = make_pi_gamma(gamma, config)
     pi_gamma = make_pi_gamma(gamma, config)
 
     fig, axs = config.plot_all_samples(all_samples, names)
     fig.suptitle(f'Comparison of Samplers. n_samples={n_samples:.0e}, burn_in={burn_in:.0e}', fontsize=16)
-    axs[1].plot(xx, pi_gamma(xx), color='green', label=r'$\pi_\gamma$')
+    axs[1].plot(xx, pi_gamma(xx), color='green', linestyle='--', label=r'$\pi_\gamma$')
     axs[1].legend()
     fig.tight_layout()
     plt.show()
