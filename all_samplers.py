@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import invgauss, wasserstein_distance
-from dataclasses import dataclass  
+from dataclasses import dataclass
+import arviz as az
 
 @dataclass
 class SamplerConfig:
@@ -42,7 +43,7 @@ class SamplerConfig:
         ax.hist(sample, bins=100, density=True, alpha=0.5, color='steelblue', edgecolor='black', label=f'{name} samples')
         ax.set_xlim(np.min(sample) - 1, np.max(sample) + 1)
         
-        for name, metric in zip(['Mean', 'Variance', 'MSE', 'Wasserstein'], [np.mean, np.var, self.mse_first_moment, self.wassterstein]):
+        for name, metric in zip(['Mean', 'Variance', 'MSE', 'Wasserstein', 'ESS'], [np.mean, np.var, self.mse_first_moment, self.wassterstein, self.effective_sample_size]):
             ax.plot(0, 0, color='none', label=f'{name}: {metric(sample):.2f}')
         
         ax.legend()
@@ -63,6 +64,9 @@ class SamplerConfig:
         xx = np.linspace(np.min(sample) - 1, np.max(sample) + 1, len(sample))
         yy = self.posterior(xx)
         return wasserstein_distance(xx, sample, u_weights=yy)
+    
+    def effective_sample_size(self, sample):
+        return az.ess(sample)
         
 
 
@@ -125,14 +129,14 @@ def make_pi_gamma(gamma, config: SamplerConfig):
 def prox_l1(x, gamma):
     return np.sign(x) * np.maximum(np.abs(x) - gamma, 0)
 
-def myula_sampler(K, config: SamplerConfig, SEED=0):
+def myula_sampler(gamma, config: SamplerConfig, SEED=0):
     np.random.seed(SEED)
     a, b, beta, lam, n_samples, burn_in = config.get_params()
     G_prime = config.make_grad_G()
     
-    L = a**2
-    gamma = 1.0 / (K*L)
-    h = gamma / (5*(gamma*L + 1))
+    L = np.abs(config.a) + 1/gamma  # Lipschitz constant 
+    h = 1.0/L
+    # h = gamma / (5*(gamma*L + 1))
 
     x = 0.0
     samples = []
@@ -191,41 +195,14 @@ def hadamard_sampler(h, config: SamplerConfig, SEED=0):
             samples.append(u * v)
     return np.array(samples)
 
-
-
-
-def main_gibbs():
-    config = SamplerConfig()
-    config.plot_sample(gibbs_sampler(config), 'Gibbs')
-    print('Done')
-
-    
-# main_gibbs()
-
-def main_myula():
-    gamma, h = 0.5, 0.05
-    config = SamplerConfig()
-    config.plot_sample(myula_sampler(gamma, h, config), 'MYULA')
-    print('Done')
-    
-# main_myula()
-
-def main_hadamard():
-    h = 0.05
-    config = SamplerConfig()
-    config.plot_sample(hadamard_sampler(h, config), 'Hadamard')
-    print('Done')
-    
-# main_hadamard()
-
-def main_all(K=50, h=0.05):
+def main_all(gamma=0.01, h=0.05):
 
     config = SamplerConfig()
     sample_size = config.n_samples
     print('Sampling...')
     sample_gib = gibbs_sampler(config)
     print('Done Gibbs sampling')
-    sample_myula = myula_sampler(K, config)
+    sample_myula = myula_sampler(gamma, config)
     print('Done MYULA sampling')
     sample_hadamard = hadamard_sampler(h, config)
     print('Done Hadamard sampling')
@@ -235,18 +212,7 @@ def main_all(K=50, h=0.05):
     mn, mx = np.min(all_samples), np.max(all_samples)
 
     xx = np.linspace(mn - 1, mx + 1, sample_size)
-    # yy = config.posterior(xx)
-
-    # mse = lambda sample: np.mean((yy - sample) ** 2)
-    # wasserstein = lambda sample: wasserstein_distance(yy, sample)
-    # for metric in [np.mean, np.var, mse, wasserstein]:
-    #     print(f'{metric.__name__} for the true distribution: {metric(yy):.4f}')
-    #     for name, sample in zip(names, all_samples):
-    #         print(f'For {name}: {metric(sample):.4f}')
-
     n_samples, burn_in = config.n_samples, config.burn_in
-    L = config.a**2
-    gamma = 1.0 / (K*L)
     # pi_gamma = make_pi_gamma(gamma, config)
     pi_gamma = make_pi_gamma(gamma, config)
 
