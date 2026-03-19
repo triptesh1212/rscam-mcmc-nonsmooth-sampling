@@ -6,7 +6,7 @@ import arviz as az
 
 @dataclass
 class SamplerConfig:
-    n_samples = int(1e5)
+    n_samples = int(1e6)
     burn_in = int(1e3)
     
     a = 1.0
@@ -23,6 +23,7 @@ class SamplerConfig:
         
         rho = np.exp(-self.beta*(G+R))
         Z = np.trapz(rho, xx)
+        print(Z)
         return rho/Z
     
     def make_grad_G(self):
@@ -31,12 +32,12 @@ class SamplerConfig:
         return grad_G
     
     def true_mean(self):
-        xx = np.linspace(-10, 10, 1000)
+        xx = np.linspace(-10, 10, 10000)
         yy = self.posterior(xx)
         return np.trapz(xx * yy, xx)
 
     def true_var(self):
-        xx = np.linspace(-10, 10, 1000)
+        xx = np.linspace(-10, 10, 10000)
         yy = self.posterior(xx)
         
         mean = np.trapz(xx * yy, xx)
@@ -136,6 +137,33 @@ def make_pi_gamma(gamma, config: SamplerConfig):
     Z = np.trapz(pi_gamma(xx), xx)
     return lambda x: pi_gamma(x) / Z
 
+
+
+def true_mean_gamma(gamma, config):
+    xx = np.linspace(-10, 10, 10000)
+    pi_gamma = make_pi_gamma(gamma, config)
+    yy = pi_gamma(xx)
+    return np.trapz(xx * yy, xx)
+
+def true_var_gamma(gamma, config):
+    xx = np.linspace(-10, 10, 10000)
+    pi_gamma = make_pi_gamma(gamma, config)
+    yy = pi_gamma(xx)
+        
+    mean = np.trapz(xx * yy, xx)
+    second_moment = np.trapz(xx**2 * yy, xx)
+        
+    return second_moment - mean**2
+
+def mse_gamma_mean(gamma, config, samples):
+    mn = true_mean_gamma(gamma, config)
+    return (mn - np.mean(samples))**2
+
+def mse_gamma_var(gamma, config, samples):
+    vr = true_var_gamma(gamma, config)
+    return (vr - np.mean(samples**2))**2
+
+    
 def prox_l1(x, gamma):
     return np.sign(x) * np.maximum(np.abs(x) - gamma, 0)
 
@@ -234,4 +262,7 @@ def main_all(gamma=0.01, h=0.05):
     plt.show()
     
 if __name__ == "__main__":
-    main_all()
+    config=SamplerConfig()
+    config.true_posterior()
+ #   main_all()
+
