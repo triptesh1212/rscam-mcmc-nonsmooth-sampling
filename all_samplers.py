@@ -22,8 +22,7 @@ class SamplerConfig:
         R = self.lam * np.abs(xx)
         
         rho = np.exp(-self.beta*(G+R))
-        Z = np.trapz(rho, xx)
-        print(Z)
+        Z = np.trapezoid(rho, xx)
         return rho/Z
     
     def make_grad_G(self):
@@ -32,20 +31,20 @@ class SamplerConfig:
         return grad_G
     
     def true_mean(self):
-        xx = np.linspace(-10, 10, 10000)
+        xx = np.linspace(-20, 20, 50000)
         yy = self.posterior(xx)
-        return np.trapz(xx * yy, xx)
+        return np.trapezoid(xx * yy, xx)
 
     def true_var(self):
-        xx = np.linspace(-10, 10, 10000)
+        xx = np.linspace(-20, 20, 50000)
         yy = self.posterior(xx)
         
-        mean = np.trapz(xx * yy, xx)
-        second_moment = np.trapz(xx**2 * yy, xx)
+        mean = np.trapezoid(xx * yy, xx)
+        second_moment = np.trapezoid(xx**2 * yy, xx)
         
         return second_moment - mean**2
     
-    def plot_sample(self, sample, name, ax):
+    def plot_sample(self, sample, name, ax=None):
         if ax is None:
             ax = plt.gca()
         x = np.linspace(np.min(sample) - 1, np.max(sample) + 1, 1000)
@@ -54,7 +53,7 @@ class SamplerConfig:
         ax.set_xlim(np.min(sample) - 1, np.max(sample) + 1)
         
         for name, metric in zip(['Mean', 'Variance', 'MSE', 'Wasserstein', 'ESS'], [np.mean, np.var, self.mse_first_moment, self.wassterstein, self.effective_sample_size]):
-            ax.plot(0, 0, color='none', label=f'{name}: {metric(sample):.2f}')
+            ax.plot(0, 0, color='none', label=f'{name}: {metric(sample):.4f}')
         
         ax.legend()
         
@@ -82,17 +81,16 @@ class SamplerConfig:
         return az.ess(sample)
 
 
-def gibbs_sampler(config: SamplerConfig, SEED=0, tol = 1e-10):
+def gibbs_sampler(config: SamplerConfig, SEED=0, tol=1e-10):
     a, b, beta, lam, n_samples, burn_in = config.get_params()
     np.random.seed(SEED)
-    tol = tol
     
     samples = []
     
     x = 0.0
     eta = 1.0
     
-    for i in range(n_samples + burn_in):
+    for _ in range(n_samples + burn_in):
         C = (1.0 / eta) + beta * a**2 
         sigma = 1.0/C
         mu = beta * sigma * a*b
@@ -105,25 +103,11 @@ def gibbs_sampler(config: SamplerConfig, SEED=0, tol = 1e-10):
         z = invgauss.rvs(mu=nu/sc, scale=sc)
         eta = 1.0 / z
         
-        if i >= burn_in:
-            samples.append(x)
+        samples.append(x)
     
-    return np.array(samples)
+    return np.array(samples[burn_in:])
 
 def make_pi_gamma(gamma, config: SamplerConfig):
-    # def H_gamma(x):
-    #     xx = np.linspace(-10, 10, 100000)
-    #     G = 0.5*(config.a*x-config.b)**2
-    #     R = config.lam * np.abs(xx)
-    #     dist = (xx - x)**2 / (2*gamma)
-    #     return np.min(R + dist) + G
-    # def pi_gamma(x):
-    #     return np.exp(-config.beta * np.vectorize(H_gamma)(x))
-        
-    # xx = np.linspace(-10, 10, 10000)
-    # Z = np.trapezoid(pi_gamma(xx), xx)
-    # rho_gamma = lambda x: pi_gamma(x)/Z
-    # return rho_gamma
     def H_gamma(x):
         G = 0.5 * (config.a * x - config.b) ** 2          # smooth quadratic term
         z = prox_l1(x, gamma * config.lam)                               # prox step (vectorised)
@@ -133,25 +117,25 @@ def make_pi_gamma(gamma, config: SamplerConfig):
     def pi_gamma(x):
         return np.exp(-config.beta * H_gamma(x))           # fully vectorised now
 
-    xx = np.linspace(-5, 5, 1000)
-    Z = np.trapz(pi_gamma(xx), xx)
+    xx = np.linspace(-20, 20, 50000)
+    Z = np.trapezoid(pi_gamma(xx), xx)
     return lambda x: pi_gamma(x) / Z
 
 
 
 def true_mean_gamma(gamma, config):
-    xx = np.linspace(-10, 10, 10000)
+    xx = np.linspace(-20, 20, 50000)
     pi_gamma = make_pi_gamma(gamma, config)
     yy = pi_gamma(xx)
-    return np.trapz(xx * yy, xx)
+    return np.trapezoid(xx * yy, xx)
 
 def true_var_gamma(gamma, config):
-    xx = np.linspace(-10, 10, 10000)
+    xx = np.linspace(-20, 20, 50000)
     pi_gamma = make_pi_gamma(gamma, config)
     yy = pi_gamma(xx)
         
-    mean = np.trapz(xx * yy, xx)
-    second_moment = np.trapz(xx**2 * yy, xx)
+    mean = np.trapezoid(xx * yy, xx)
+    second_moment = np.trapezoid(xx**2 * yy, xx)
         
     return second_moment - mean**2
 
@@ -169,7 +153,7 @@ def prox_l1(x, gamma):
 
 def myula_sampler(gamma, config: SamplerConfig, SEED=0):
     np.random.seed(SEED)
-    a, b, beta, lam, n_samples, burn_in = config.get_params()
+    _, _, beta, lam, n_samples, burn_in = config.get_params()
     G_prime = config.make_grad_G()
     
     L = np.abs(config.a) + 1/gamma  # Lipschitz constant 
@@ -179,7 +163,7 @@ def myula_sampler(gamma, config: SamplerConfig, SEED=0):
     x = 0.0
     samples = []
 
-    for i in range(n_samples+burn_in):
+    for _ in range(n_samples+burn_in):
         grad_G = G_prime(x)
 
         prox = prox_l1(x, gamma * lam)
@@ -190,9 +174,6 @@ def myula_sampler(gamma, config: SamplerConfig, SEED=0):
 
         x = x - h * (grad_G + grad_R_gamma) + noise
 
-        # if i >= burn_in:
-        #     samples.append(x)
-        
         samples.append(x)
 
     # return np.array(samples)
@@ -210,7 +191,7 @@ def hadamard_sampler(h, config: SamplerConfig, SEED=0):
     u = 1.0
     v = 1.0
 
-    for i in range(n_samples + burn_in):
+    for _ in range(n_samples + burn_in):
         
         dW1 = np.sqrt(h) * np.random.randn()
         dW2 = np.sqrt(h) * np.random.randn()
@@ -229,11 +210,10 @@ def hadamard_sampler(h, config: SamplerConfig, SEED=0):
         disc = b**2 - 4*a*c
         u = (-b + np.sqrt(disc))/(2*a)
         
-        if i >= burn_in:
-            samples.append(u * v)
-    return np.array(samples)
+        samples.append(u * v)
+    return np.array(samples[burn_in:])
 
-def main_all(gamma=0.01, h=0.05):
+def main_all(gamma=0.0031622776601683794, h=0.03162277660168379):
 
     config = SamplerConfig()
     sample_size = config.n_samples
@@ -251,18 +231,18 @@ def main_all(gamma=0.01, h=0.05):
 
     xx = np.linspace(mn - 1, mx + 1, sample_size)
     n_samples, burn_in = config.n_samples, config.burn_in
-    # pi_gamma = make_pi_gamma(gamma, config)
     pi_gamma = make_pi_gamma(gamma, config)
 
     fig, axs = config.plot_all_samples(all_samples, names)
-    fig.suptitle(f'Comparison of Samplers. n_samples={n_samples:.0e}, burn_in={burn_in:.0e}', fontsize=16)
+    fig.suptitle(f'Comparison of Samplers. {burn_in:.0e} burn in, {n_samples:.0e} samples', fontsize=16)
     axs[1].plot(xx, pi_gamma(xx), color='green', linestyle='--', label=r'$\pi_\gamma$')
     axs[1].legend()
     fig.tight_layout()
+    plt.savefig('Images/all_samplers.pdf', bbox_inches='tight')
     plt.show()
     
 if __name__ == "__main__":
-    config=SamplerConfig()
-    config.true_posterior()
- #   main_all()
+    # config=SamplerConfig()
+    # config.posterior()
+    main_all()
 
